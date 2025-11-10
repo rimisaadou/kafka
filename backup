@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  kafka:
+    image: bashj79/kafka-kraft
+    container_name: kafka-server
+    ports:
+      - "9092:9092"
+    networks:
+      - kafka-network
+    healthcheck:
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1" ]
+      interval: 5s
+      timeout: 6s
+      retries: 5
+      start_period: 7s
+
+  kafka-init:
+    image: bashj79/kafka-kraft
+    container_name: kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - kafka-network
+    command: >
+      bash -c "
+      echo 'Waiting for Kafka to be fully ready...' &&
+      for i in {1..30}; do
+        if /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:9092 >/dev/null 2>&1; then
+          echo 'Kafka is ready!';
+          break;
+        fi;
+        echo \"Attempt $$i/30: Kafka not ready yet, waiting...\";
+        sleep 2;
+      done &&
+      sleep 5 &&
+      echo 'Creating topic my-first-topic...' &&
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --topic my-first-topic --partitions 1 --replication-factor 1 --if-not-exists &&
+      echo '' &&
+      echo '✓ Topic created! Listing all topics:' &&
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list &&
+      echo '' &&
+      echo 'Topic details:' &&
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic my-first-topic &&
+      echo '' &&
+      echo '✓ Initialization complete!'
+      "
+    restart: "no"
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui
+    container_name: kafka-ui
+    user: root
+    ports:
+      - "8080:8080"
+      - "9093:9092"
+    environment:
+      DYNAMIC_CONFIG_ENABLED: 'true'
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      - kafka
+    networks:
+      - kafka-network
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Installing socat..."
+        apk add --no-cache socat
+
+        echo "Starting socat port forwarding to kafka container..."
+        socat tcp-listen:9092,reuseaddr,fork tcp:kafka:9092 &
+
+        echo "Socat is running!"
+        echo "Starting Kafka UI..."
+        exec java -jar /kafka-ui-api.jar
+
+networks:
+  kafka-network:
+    driver: bridge
